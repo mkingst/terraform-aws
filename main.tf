@@ -2,20 +2,10 @@ provider "aws" {
   region = lookup(var.awsprops, "region")
 }
 
-resource "tls_private_key" "pk" {
-    algorithm = "RSA"
-    rsa_bits  = 4096
-  }
-
 resource "aws_key_pair" "deployer" {
     key_name   = "deployer"
-    public_key = tls_private_key.pk.public_key_openssh
-
-    provisioner "local-exec" {
-      command = "echo '${tls_private_key.pk.private_key_pem}' > ./myKey.pem"
-    }
-  }
-
+    public_key = file("~/.ssh/id_rsa.pub")
+}
 
 resource "aws_security_group" "nginx-iac-sg" {
   name = lookup(var.awsprops, "secgroupname")

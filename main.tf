@@ -33,7 +33,28 @@ resource "aws_security_group" "nginx-iac-sg" {
   ingress {
     from_port = 80
     protocol = "tcp"
-    to_port = 80
+    to_port = 90
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port = 443
+    protocol = "tcp"
+    to_port = 443
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port = 11080
+    protocol = "tcp"
+    to_port = 11085
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port = 8000
+    protocol = "tcp"
+    to_port = 8100
     cidr_blocks = ["0.0.0.0/0"]
   }
 

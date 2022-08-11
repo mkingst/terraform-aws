@@ -1,0 +1,148 @@
+- hosts: nginx
+  gather_facts: no
+  become: yes
+  vars_files:
+    - keys.yml
+  remote_user: admin #user on the ec2 instance
+  tasks:
+    - name: wait for ssh to come up
+      wait_for_connection:
+        delay: 5
+        timeout: 120
+  
+    - name: Gathering facts
+      setup:
+
+    - name: (Debian/Ubuntu) Install dependencies
+      apt:
+        name: "{{ nginx_debian_dependencies }}"
+        update_cache: true
+        state: latest  
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: (Debian/Red Hat/SLES OSs) Set up NGINX signing key URL
+      set_fact:
+        keysite: "{{ nginx_signing_key | default(nginx_default_signing_key_pgp) }}"
+      when: ansible_facts['os_family'] != "Alpine"
+
+    - name: (Debian/Ubuntu) Add NGINX signing key
+      apt_key:
+        id: 573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62
+        url: "{{ keysite }}"
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: (Debian/Red Hat/SLES OSs) Set up NGINX Plus license
+      block:
+        - name: (Debian/Red Hat/SLES OSs) Create SSL directory
+          file:
+              path: /etc/ssl/nginx
+              state: directory
+              mode: 0755
+
+        - name: (Debian/Red Hat/SLES OSs) Copy NGINX Plus certificate and license key
+          copy:
+              src: "{{ item }}"
+              dest: /etc/ssl/nginx
+              decrypt: true
+              mode: 0444
+          loop:
+              - "{{ nginx_license['certificate'] }}"
+              - "{{ nginx_license['key'] }}"
+      when: ansible_facts['os_family'] != "Alpine"
+
+    - name: (Debian/Ubuntu) {{ nginx_license_status is defined | ternary('Remove', 'Configure') }} NGINX Plus license verification
+      blockinfile:
+        path: /etc/apt/apt.conf.d/90nginx
+        create: true
+        block: |
+          Acquire::https::{{ (nginx_repository | default(nginx_plus_default_repository_debian)) | regex_search('(?<=https://)[^/]*') }}::Verify-Peer "true";
+          Acquire::https::{{ (nginx_repository | default(nginx_plus_default_repository_debian)) | regex_search('(?<=https://)[^/]*') }}::Verify-Host "true";
+          Acquire::https::{{ (nginx_repository | default(nginx_plus_default_repository_debian)) | regex_search('(?<=https://)[^/]*') }}::SslCert     "/etc/ssl/nginx/nginx-repo.crt";
+          Acquire::https::{{ (nginx_repository | default(nginx_plus_default_repository_debian)) | regex_search('(?<=https://)[^/]*') }}::SslKey      "/etc/ssl/nginx/nginx-repo.key";
+        state: "{{ nginx_license_status | default ('present') }}"
+        mode: 0444
+
+    - name: (Debian/Ubuntu) {{ nginx_license_status is defined | ternary('Remove', 'Configure') }} NGINX Plus repository
+      apt_repository:
+        filename: nginx-plus
+        repo: "{{ nginx_repository | default(nginx_plus_default_repository_debian) }}"
+        update_cache: false
+        state: "{{ nginx_license_status | default ('present') }}"
+        mode: 0644
+      when: nginx_manage_repo | bool #only do this if nginx_manage_repo is set to true
+
+    - name: (Debian/Ubuntu) Install NGINX Plus
+      apt:
+        name: "nginx-plus{{ nginx_version | default('') }}"
+        state: "{{ nginx_state }}"
+        update_cache: true
+      ignore_errors: "{{ ansible_check_mode }}"
+      when: nginx_license_status is not defined
+      notify: (Handler) Run NGINX
+
+    - name: Set NGINX Plus license state to absent
+      set_fact:
+        nginx_license_status: absent
+
+    - name: (Debian/Red Hat/SLES OSs) Delete NGINX Plus license
+      file:
+        path: /etc/ssl/nginx
+        state: absent
+      when: ansible_facts['distribution'] != "Alpine"
+
+    - name: (Debian/Ubuntu) {{ nginx_license_status is defined | ternary('Remove', 'Configure') }} NGINX Plus license verification
+      blockinfile:
+        path: /etc/apt/apt.conf.d/90nginx
+        create: true
+        block: |
+          Acquire::https::{{ (nginx_repository | default(nginx_plus_default_repository_debian)) | regex_search('(?<=https://)[^/]*') }}::Verify-Peer "true";
+          Acquire::https::{{ (nginx_repository | default(nginx_plus_default_repository_debian)) | regex_search('(?<=https://)[^/]*') }}::Verify-Host "true";
+          Acquire::https::{{ (nginx_repository | default(nginx_plus_default_repository_debian)) | regex_search('(?<=https://)[^/]*') }}::SslCert     "/etc/ssl/nginx/nginx-repo.crt";
+          Acquire::https::{{ (nginx_repository | default(nginx_plus_default_repository_debian)) | regex_search('(?<=https://)[^/]*') }}::SslKey      "/etc/ssl/nginx/nginx-repo.key";
+        state: "{{ nginx_license_status | default ('present') }}"
+        mode: 0444
+
+    - name: (Debian/Ubuntu) {{ nginx_license_status is defined | ternary('Remove', 'Configure') }} NGINX Plus repository
+      apt_repository:
+        filename: nginx-plus
+        repo: "{{ nginx_repository | default(nginx_plus_default_repository_debian) }}"
+        update_cache: false
+        state: "{{ nginx_license_status | default ('present') }}"
+        mode: 0644
+      when: nginx_manage_repo | bool #only do this if nginx_manage_repo is set to true
+
+    - name: collect base ansible facts
+      setup:
+
+    - name: Collect Instance Facts 
+      ec2_metadata_facts:
+
+  handlers:
+    - name: (Handler) Start/reload NGINX
+      service:
+        name: nginx
+        state: reloaded
+        enabled: true
+      when:
+        - nginx_start | bool
+        - not ansible_check_mode | bool
+      listen: (Handler) Run NGINX
+
+    - name: (Handler) Check NGINX
+      command: nginx -t
+      args:
+        chdir: "{{ ((ansible_facts['system'] | lower is not search('bsd')) | ternary('/etc/nginx', '/usr/local/sbin')) }}"
+      register: config_check
+      ignore_errors: true
+      check_mode: false
+      changed_when: false
+      listen: (Handler) Run NGINX
+
+    - name: (Handler) Print NGINX error if syntax check fails
+      debug:
+        var: config_check.stderr_lines
+      failed_when: config_check.rc != 0
+      when:
+        - config_check.stderr_lines is defined
+        - config_check.rc != 0
+      listen: (Handler) Run NGINX

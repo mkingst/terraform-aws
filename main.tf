@@ -2,6 +2,16 @@ provider "aws" {
   region = lookup(var.awsprops, "region")
 }
 
+data "aws_ami" "buster" {
+  most_recent = true
+  owners = ["aws-marketplace"]
+
+  filter {
+    name = "name"
+    values = ["debian-10-amd64-*"]
+   }
+  }
+
 resource "aws_key_pair" "deployer" {
     key_name   = "deployer"
     public_key = file("~/.ssh/id_rsa.pub")
@@ -39,9 +49,8 @@ resource "aws_security_group" "nginx-iac-sg" {
   }
 }
 
-
 resource "aws_instance" "project-iac" {
-  ami = lookup(var.awsprops, "ami")
+  ami = data.aws_ami.buster.id
   instance_type = lookup(var.awsprops, "itype")
   associate_public_ip_address = lookup(var.awsprops, "publicip")
   key_name = aws_key_pair.deployer.key_name
